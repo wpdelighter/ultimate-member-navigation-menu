@@ -1,0 +1,489 @@
+<?php
+
+// If this file is called directly, abort.
+if ( ! defined( 'WPINC' ) ) {
+	die;
+}
+
+/**
+ * The core plugin class.
+ *
+ * This is used to define internationalization, admin-specific hooks, and
+ * public-facing site hooks.
+ *
+ * Also maintains the unique identifier of this plugin as well as the current
+ * version of the plugin.
+ *
+ * @since      1.0.0
+ * @package    Ultimate_Member_Navigation_Menu
+ * @subpackage Ultimate_Member_Navigation_Menu/includes
+ * @author     WP Delighter <support@wpdelighter.com>
+ */
+class UMNM_Front_Menus {
+
+	/**
+	 * The unique identifier of this plugin.
+	 *
+	 * @since    1.0.0
+	 * @access   protected
+	 * @var      string $plugin_name The string used to uniquely identify this plugin.
+	 */
+	protected $plugin_name;
+
+	/**
+	 * The current version of the plugin.
+	 *
+	 * @since    1.0.0
+	 * @access   protected
+	 * @var      string $version The current version of the plugin.
+	 */
+	protected $version;
+
+	/**
+	 * Define the core functionality of the plugin.
+	 *
+	 * Set the plugin name and the plugin version that can be used throughout the plugin.
+	 * Load the dependencies, define the locale, and set the hooks for the admin area and
+	 * the public-facing side of the site.
+	 *
+	 * @since    1.0.0
+	 */
+	public function __construct() {
+
+		$this->plugin_name = 'ultimate-member-navigation-menu';
+		$this->version     = '1.0.0';
+
+		// Load the Ultimate Member metabox in the WP Nav Menu Admin UI
+		add_action( 'load-nav-menus.php', array( $this, 'umnm_admin_wp_nav_menu_meta_box' ), 99 );
+
+		add_filter( 'wp_setup_nav_menu_item', array( $this, 'umnm_setup_nav_menu_item' ), 10, 1 );
+
+	}
+
+	/**
+	 * Register meta box and associated JS for Ultimate Member WP Nav Menu .
+	 *
+	 * @since    1.0.0
+	 */
+	public function umnm_admin_wp_nav_menu_meta_box() {
+
+		add_meta_box( $this->plugin_name, __( 'Ultimate Member', 'ultimate-member-navigation-menu' ), array(
+			$this,
+			'umnm_admin_do_wp_nav_menu_meta_box'
+		), 'nav-menus', 'side', 'default' );
+
+		add_action( 'admin_print_footer_scripts', array( $this, 'umnm_admin_wp_nav_menu_restrict_items' ) );
+	}
+
+	/**
+	 * Build and populate the Ultimate Member accordion on Appearance > Menus.
+	 *
+	 * @since    1.0.0
+	 *
+	 * @global $nav_menu_selected_id
+	 */
+	public function umnm_admin_do_wp_nav_menu_meta_box() {
+		global $nav_menu_selected_id;
+
+		$walker = new UMNM_Walker_Nav_Menu_Checklist( false );
+		$args   = array( 'walker' => $walker );
+
+		$post_type_name = 'ultimate-member';
+
+		$tabs = array();
+
+		$tabs['loggedin']['label'] = __( 'Logged-In', 'ultimate-member-navigation-menu' );
+		$tabs['loggedin']['pages'] = $this->umnm_nav_menu_get_loggedin_pages();
+
+		$tabs['loggedout']['label'] = __( 'Logged-Out', 'ultimate-member-navigation-menu' );
+		$tabs['loggedout']['pages'] = $this->umnm_nav_menu_get_loggedout_pages();
+
+		?>
+
+		<div id="umnm-menu" class="posttypediv">
+			<h4><?php _e( 'Logged-In', 'ultimate-member-navigation-menu' ) ?></h4>
+
+			<p><?php _e( '<em>Logged-In</em> links are relative to the current user, and are not visible to visitors who are not logged in.', 'ultimate_member_navigation_menu' ) ?></p>
+
+			<div id="tabs-panel-posttype-<?php echo $post_type_name; ?>-loggedin" class="tabs-panel tabs-panel-active">
+				<ul id="umnm-menu-checklist-loggedin" class="categorychecklist form-no-clear">
+					<?php echo walk_nav_menu_tree( array_map( 'wp_setup_nav_menu_item', $tabs['loggedin']['pages'] ), 0, (object) $args ); ?>
+				</ul>
+			</div>
+
+			<h4><?php _e( 'Logged-Out', 'ultimate-member-navigation-menu' ) ?></h4>
+
+			<p><?php _e( '<em>Logged-Out</em> links are not visible to users who are logged in.', 'ultimate-member-navigation-menu' ) ?></p>
+
+			<div id="tabs-panel-posttype-<?php echo $post_type_name; ?>-loggedout" class="tabs-panel tabs-panel-active">
+				<ul id="umnm-menu-checklist-loggedout" class="categorychecklist form-no-clear">
+					<?php echo walk_nav_menu_tree( array_map( 'wp_setup_nav_menu_item', $tabs['loggedout']['pages'] ), 0, (object) $args ); ?>
+				</ul>
+			</div>
+
+			<p class="button-controls">
+			<span class="add-to-menu">
+				<input
+					type="submit"<?php if ( function_exists( 'wp_nav_menu_disabled_check' ) ) : wp_nav_menu_disabled_check( $nav_menu_selected_id ); endif; ?>
+					class="button-secondary submit-add-to-menu right"
+					value="<?php esc_attr_e( 'Add to Menu', 'ultimate_member_navigation_menu' ); ?>"
+					name="add-custom-menu-item" id="submit-umnm-menu"/>
+				<span class="spinner"></span>
+			</span>
+			</p>
+		</div><!-- /#umnm-menu -->
+
+		<?php
+	}
+
+	/**
+	 * Restrict various items from view if editing a Ultimate Member menu.
+	 *
+	 * If a person is editing a UM menu item, that person should not be able to
+	 * see or edit the following fields:
+	 *
+	 * - CSS Classes - We use the 'umnm-menu' CSS class to determine if the
+	 *   menu item belongs to UM, so we cannot allow manipulation of this field to
+	 *   occur.
+	 * - URL - This field is automatically generated by UM on output, so this
+	 *   field is useless and can cause confusion.
+	 *
+	 * Note: These restrictions are only enforced if JavaScript is enabled.
+	 *
+	 * @since    1.0.0
+	 */
+	public function umnm_admin_wp_nav_menu_restrict_items() {
+		?>
+		<script type="text/javascript">
+			jQuery('#menu-to-edit').on('click', 'a.item-edit', function () {
+				var settings = jQuery(this).closest('.menu-item-bar').next('.menu-item-settings');
+				var css_class = settings.find('.edit-menu-item-classes');
+
+				if (css_class.val().indexOf('umnm-menu') === 0) {
+					css_class.attr('readonly', 'readonly');
+					settings.find('.field-url').css('display', 'none');
+				}
+			});
+		</script>
+		<?php
+	}
+
+	/**
+	 * Create fake "post" objects for UM's logged-in nav menu for use in the WordPress "Menus" settings page.
+	 *
+	 * WordPress nav menus work by representing post or tax term data as a custom
+	 * post type, which is then used to populate the checkboxes that appear on
+	 * Dashboard > Appearance > Menu as well as the menu as rendered on the front
+	 * end. Most of the items in the Ultimate Member set of nav items are neither posts
+	 * nor tax terms, so we fake a post-like object so as to be compatible with the
+	 * menu.
+	 *
+	 * This technique also allows us to generate links dynamically, so that, for
+	 * example, "My Profile" will always point to the URL of the profile of the
+	 * logged-in user.
+	 *
+	 * @since    1.0.0
+	 *
+	 * @return mixed A URL or an array of dummy pages.
+	 */
+	public function umnm_nav_menu_get_loggedin_pages() {
+
+		global $ultimatemember;
+
+		if ( ! um_get_option( 'profile_menu' ) ) {
+			return;
+		}
+
+		// get active tabs
+		$tabs = $ultimatemember->profile->tabs_active();
+
+		// need enough tabs to continue
+		if ( count( $tabs ) <= 1 ) {
+			return;
+		}
+
+		// Move default tab priority
+		$default_tab = um_get_option( 'profile_menu_default_tab' );
+		$dtab        = ( isset( $tabs[ $default_tab ] ) ) ? $tabs[ $default_tab ] : 'main';
+		if ( isset( $tabs[ $default_tab ] ) ) {
+			unset( $tabs[ $default_tab ] );
+			$dtabs[ $default_tab ] = $dtab;
+			$tabs                  = $dtabs + $tabs;
+		}
+
+		$umnm_menu_items = array();
+
+		foreach ( $tabs as $id => $tab ) {
+
+			if ( isset( $tab['hidden'] ) ) {
+				continue;
+			}
+
+			$nav_link = $ultimatemember->permalinks->profile_url();
+			$nav_link = remove_query_arg( 'um_action', $nav_link );
+			$nav_link = remove_query_arg( 'subnav', $nav_link );
+			$nav_link = add_query_arg( 'profiletab', $id, $nav_link );
+
+			$umnm_menu_items[] = array(
+				'name'                    => $tab['name'],
+				'slug'                    => 'umnav-' . $id,
+				'link'                    => $nav_link,
+				'css_id'                  => 'umnav-' . $id,
+				'show_for_displayed_user' => true,
+			);
+
+			if ( isset( $tab['subnav'] ) ) {
+
+				foreach ( $tab['subnav'] as $subid => $subtab ) {
+
+					$subnav_link = add_query_arg( 'subnav', $subid, $nav_link );
+
+					$umnm_menu_items[] = array(
+						'name'                    => $subtab,
+						'slug'                    => 'umnav-' . $subid,
+						'link'                    => $subnav_link,
+						'css_id'                  => 'umnav-' . $subid,
+						'show_for_displayed_user' => true,
+					);
+				}
+			}
+
+		}
+
+		// Some UM nav menu items will not be represented in umnm_nav, because they are not real UM components. 
+		// We add them manually here.
+		$umnm_menu_items[] = array(
+			'name'   => __( 'Log Out', 'ultimate-member-navigation-menu' ),
+			'slug'   => 'umnav-logout',
+			'link'   => wp_logout_url(),
+			'css_id' => 'umnav-' . $subid,
+		);
+
+		// If there's nothing to show, we're done
+		if ( count( $umnm_menu_items ) < 1 ) {
+			return false;
+		}
+
+		$page_args = array();
+
+		foreach ( $umnm_menu_items as $umnm_item ) {
+
+			$item_name = trim( strip_tags( $umnm_item['name'] ) );
+
+			$page_args[ $umnm_item['slug'] ] = (object) array(
+				'ID'             => - 1,
+				'post_title'     => $item_name,
+				'post_author'    => 0,
+				'post_date'      => 0,
+				'post_excerpt'   => $umnm_item['slug'],
+				'post_type'      => 'page',
+				'post_status'    => 'publish',
+				'comment_status' => 'closed',
+				'guid'           => $umnm_item['link']
+			);
+		}
+
+		return $page_args;
+	}
+
+	/**
+	 * Create fake "post" objects for UM's logged-out nav menu for use in the WordPress "Menus" settings page.
+	 *
+	 * WordPress nav menus work by representing post or tax term data as a custom
+	 * post type, which is then used to populate the checkboxes that appear on
+	 * Dashboard > Appearance > Menu as well as the menu as rendered on the front
+	 * end. Most of the items in the Ultimate Member set of nav items are neither posts
+	 * nor tax terms, so we fake a post-like object so as to be compatible with the
+	 * menu.
+	 *
+	 * @since    1.0.0
+	 *
+	 * @return mixed A URL or an array of dummy pages.
+	 */
+	public function umnm_nav_menu_get_loggedout_pages() {
+
+		global $ultimatemember;
+
+		$umnm_menu_items = array();
+
+		$login_page_url = '';
+		$login_page_id  = $ultimatemember->query->find_post_id( 'page', '_um_core', 'login' );
+		if ( $login_page_id ) {
+			$login_page_url = get_permalink( $login_page_id );
+		}
+
+		$umnm_menu_items[] = array(
+			'name' => __( 'Log In', 'ultimate-member-navigation-menu' ),
+			'slug' => 'umnav-login',
+			'link' => ( empty( $login_page_url ) ? wp_login_url() : $login_page_url ),
+		);
+
+		$register_page_id = $ultimatemember->query->find_post_id( 'page', '_um_core', 'register' );
+		if ( ! empty( $register_page_id ) ) {
+			$register_page     = get_post( $register_page_id );
+			$umnm_menu_items[] = array(
+				'name' => $register_page->post_title,
+				'slug' => 'umnav-register',
+				'link' => get_permalink( $register_page->ID ),
+			);
+		}
+
+		// If there's nothing to show, we're done
+		if ( count( $umnm_menu_items ) < 1 ) {
+			return false;
+		}
+
+		$page_args = array();
+
+		foreach ( $umnm_menu_items as $umnm_item ) {
+
+			$item_name = trim( strip_tags( $umnm_item['name'] ) );
+
+			$page_args[ $umnm_item['slug'] ] = (object) array(
+				'ID'             => - 1,
+				'post_title'     => $item_name,
+				'post_author'    => 0,
+				'post_date'      => 0,
+				'post_excerpt'   => $umnm_item['slug'],
+				'post_type'      => 'page',
+				'post_status'    => 'publish',
+				'comment_status' => 'closed',
+				'guid'           => $umnm_item['link']
+			);
+		}
+
+		return $page_args;
+	}
+
+	/**
+	 * Get the URL for a Ultimate Member WP nav menu item, based on slug.
+	 *
+	 * Ultimate Member-specific WP nav menu items have dynamically generated URLs,
+	 * based on the identity of the current user. This function lets you fetch the
+	 * proper URL for a given nav item slug (such as 'login' or 'messages').
+	 *
+	 * @since    1.0.0
+	 *
+	 * @param string $slug The slug of the nav item: login, register, or one of the slugs
+	 *
+	 * @return string $nav_item_url The URL generated for the current user.
+	 */
+	function umnm_nav_menu_get_item_url( $slug ) {
+
+		$nav_menu_items_loggedin  = $this->umnm_nav_menu_get_loggedin_pages();
+		$nav_menu_items_loggedout = $this->umnm_nav_menu_get_loggedout_pages();
+		$nav_menu_items           = array_merge( (array) $nav_menu_items_loggedin, (array) $nav_menu_items_loggedout );
+
+		$nav_item_url = '';
+		if ( isset( $nav_menu_items[ $slug ] ) ) {
+			$nav_item_url = $nav_menu_items[ $slug ]->guid;
+		}
+
+		return $nav_item_url;
+	}
+
+	/**
+	 * Add Ultimate Member specific items to the wp_nav_menu.
+	 *
+	 * @since    1.0.0
+	 *
+	 * @param WP_Post $menu_item The menu item.
+	 *
+	 * @return obj The modified WP_Post object.
+	 */
+	public function umnm_setup_nav_menu_item( $menu_item ) {
+		if ( is_admin() ) {
+			return $menu_item;
+		}
+
+		// Prevent a notice error when using the customizer
+		$menu_classes = $menu_item->classes;
+
+		if ( is_array( $menu_classes ) ) {
+			$menu_classes = implode( ' ', $menu_item->classes );
+		}
+
+		// We use information stored in the CSS class to determine what kind of
+		// menu item this is, and how it should be treated
+		preg_match( '/\sumnm-(.*)-nav/', $menu_classes, $matches );
+
+		// If this isn't a UM menu item, we can stop here
+		if ( empty( $matches[1] ) ) {
+			return $menu_item;
+		}
+
+		switch ( $matches[1] ) {
+
+			case 'umnav-login' :
+				if ( is_user_logged_in() ) {
+					$menu_item->_invalid = true;
+				} else {
+					$menu_item->url = $this->umnm_nav_menu_get_item_url( $matches[1] );
+				}
+
+				break;
+
+			case 'umnav-logout' :
+				if ( ! is_user_logged_in() ) {
+					$menu_item->_invalid = true;
+				} else {
+					$menu_item->url = $this->umnm_nav_menu_get_item_url( $matches[1] );
+				}
+
+				break;
+
+			// Don't show the Register link to logged-in users
+			case 'umnav-register' :
+				if ( is_user_logged_in() ) {
+					$menu_item->_invalid = true;
+				}
+
+				break;
+
+			// All other BP nav items are specific to the logged-in user,
+			// and so are not relevant to logged-out users
+			default:
+				if ( is_user_logged_in() ) {
+					$menu_item->url = $this->umnm_nav_menu_get_item_url( $matches[1] );
+				} else {
+					$menu_item->_invalid = true;
+				}
+
+				break;
+		}
+
+		// If component is deactivated, make sure menu item doesn't render
+		if ( empty( $menu_item->url ) ) {
+			$menu_item->_invalid = true;
+		} else {
+			// Highlight the current page
+			$current = $this->umnm_get_requested_url();
+			if ( strpos( $current, $menu_item->url ) !== false ) {
+				if ( is_array( $menu_item->classes ) ) {
+					$menu_item->classes[] = 'current_page_item';
+					$menu_item->classes[] = 'current-menu-item';
+				} else {
+					$menu_item->classes = array( 'current_page_item', 'current-menu-item' );
+				}
+			}
+		}
+
+		return $menu_item;
+	}
+
+	/**
+	 * Return the URL as requested on the current page load by the user agent.
+	 *
+	 * @since    1.0.0
+	 *
+	 * @return string Requested URL string.
+	 */
+	public function umnm_get_requested_url() {
+
+		$requested_url = is_ssl() ? 'https://' : 'http://';
+		$requested_url .= $_SERVER['HTTP_HOST'] . $_SERVER['REQUEST_URI'];
+
+		return apply_filters( 'umnm_get_requested_url', $requested_url );
+	}
+
+}
